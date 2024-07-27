@@ -1,0 +1,294 @@
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include "LoRa_E32.h"
+#include <Adafruit_BNO055.h>
+#include <utility/imumaths.h>
+
+#define M1 4
+#define M0 3
+#define RXPinLora 1
+#define TXPinLora 0
+#define RXPinGPS 34
+#define TXPinGPS 35
+
+#define SEALEVELPRESSURE_HPA (1013.25)
+#define BNO055_SAMPLERATE_DELAY_MS 100
+union Message
+{
+    struct
+    {
+        float temperature;
+        float enlem;
+        float boylam;
+        float uydu;
+        float basinc;
+        float yukseklik;
+        float orx;
+        float ory;
+        float orz;
+        int stepCount;
+        char fireStatus;
+    };
+    uint8_t bytes[sizeof(float) * 9 + sizeof(int) + sizeof(char)];
+};
+float _temp = 0;
+float _enlem = 0;
+float _boylam = 0;
+float _uydu = 0;
+float _pressure = 0;
+float _altitude = 0;
+float _orx = 0;
+float _ory = 0;
+float _orz = 0;
+float _accx = 0;
+float _accy = 0;
+float _accz = 0;
+int _stepCount = 0;
+char _fireStatus = '0';
+
+Adafruit_BMP3XX bmp;
+SoftwareSerial serialConLora(RXPinLora, TXPinLora);
+LoRa_E32 e32ttl(&serialConLora);
+SoftwareSerial serialConGPS(RXPinGPS, TXPinGPS);
+TinyGPSPlus gps;
+
+void setup()
+{
+    Serial.begin(9600);
+    Serial.println("BMP3xx, LORA, GPS, BNO055");
+
+    serialConGPS.begin(9600);
+    serialConLora.begin(9600);
+
+    if (!bmp.begin_I2C(0x77, &Wire1))
+    {
+        Serial.println("Could not find a valid BMP3 sensor, check wiring!");
+    }
+
+    pinMode(M0, OUTPUT);
+    pinMode(M1, OUTPUT);
+    digitalWrite(M0, LOW);
+    digitalWrite(M1, LOW);
+
+    if (!bno.begin())
+    {
+        Serial.println("Ooops, no BNO055 detected ... Check your wiring or I2C ADDR!");
+    }
+    bno.setExtCrystalUse(true);
+
+    delay(250);
+    e32ttl.begin();
+    delay(500);
+    Serial.println("Verici sistem açıldı...");
+}
+
+void loop()
+{
+    bnoGetData();
+    bmpGetData();
+
+    while (serialConGPS.available())
+    {
+        char c = serialConGPS.read();
+        if (gps.encode(c))
+        {
+            printGPSData();
+        }
+    }
+
+    loraSend();
+    delay(1500);
+}
+
+void bnoGetData()
+{
+    sensors_event_t orientationData, angVelocityData, linearAccelData, magnetometerData, accelerometerData, gravityData;
+    bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
+    bno.getEvent(&angVelocityData, Adafruit_BNO055::VECTOR_GYROSCOPE);
+    bno.getEvent(&linearAccelData, Adafruit_BNO055::VECTOR_LINEARACCEL);
+    bno.getEvent(&magnetometerData, Adafruit_BNO055::VECTOR_MAGNETOMETER);
+    bno.getEvent(&accelerometerData, Adafruit_BNO055::VECTOR_ACCELEROMETER);
+    bno.getEvent(&gravityData, Adafruit_BNO055::VECTOR_GRAVITY);
+
+    // Print orientation data for debugging
+    printEvent(&orientationData);
+    printEvent(&angVelocityData);
+    printEvent(&linearAccelData);
+    printEvent(&magnetometerData);
+    printEvent(&accelerometerData);
+    printEvent(&gravityData);
+
+    int8_t boardTemp = bno.getTemp();
+    Serial.println();
+    Serial.print("Temperature: ");
+    Serial.println(boardTemp);
+
+    uint8_t system, gyro, accel, mag = 0;
+    bno.getCalibration(&system, &gyro, &accel, &mag);
+    Serial.println();
+    Serial.print("Calibration: Sys=");
+    Serial.print(system);
+    Serial.print(" Gyro=");
+    Serial.print(gyro);
+    Serial.print(" Accel=");
+    Serial.print(accel);
+    Serial.print(" Mag=");
+    Serial.println(mag);
+
+    Serial.println("--");
+    delay(BNO055_SAMPLERATE_DELAY_MS);
+}
+
+void printEvent(sensors_event_t *event)
+{
+    double x = -1000000, y = -1000000, z = -1000000;
+    if (event->type == SENSOR_TYPE_ACCELEROMETER)
+    {
+        Serial.print("Accl:");
+        x = event->acceleration.x;
+        y = event->acceleration.y;
+        z = event->acceleration.z;
+    }
+    else if (event->type == SENSOR_TYPE_ORIENTATION)
+    {
+        Serial.print("Orient:");
+        x = event->orientation.x;
+        y = event->orientation.y;
+        z = event->orientation.z;
+    }
+    else if (event->type == SENSOR_TYPE_MAGNETIC_FIELD)
+    {
+        Serial.print("Mag:");
+        x = event->magnetic.x;
+        y = event->magnetic.y;
+        z = event->magnetic.z;
+    }
+    else if (event->type == SENSOR_TYPE_GYROSCOPE)
+    {
+        Serial.print("Gyro:");
+        x = event->gyro.x;
+        y = event->gyro.y;
+        z = event->gyro.z;
+    }
+    else if (event->type == SENSOR_TYPE_ROTATION_VECTOR)
+    {
+        Serial.print("Rot:");
+        x = event->gyro.x;
+        y = event->gyro.y;
+        z = event->gyro.z;
+    }
+    else if (event->type == SENSOR_TYPE_LINEAR_ACCELERATION)
+    {
+        Serial.print("Linear:");
+        x = event->acceleration.x;
+        y = event->acceleration.y;
+        z = event->acceleration.z;
+    }
+    else if (event->type == SENSOR_TYPE_GRAVITY)
+    {
+        Serial.print("Gravity:");
+        x = event->acceleration.x;
+        y = event->acceleration.y;
+        z = event->acceleration.z;
+    }
+    else
+    {
+        Serial.print("Unk:");
+    }
+
+    Serial.print("\tx= ");
+    Serial.print(x);
+    Serial.print(" |\ty= ");
+    Serial.print(y);
+    Serial.print(" |\tz= ");
+    Serial.println(z);
+}
+
+void bmpGetData()
+{
+    if (!bmp.performReading())
+    {
+        Serial.println("Failed to perform reading :(");
+    }
+
+    _temp = bmp.temperature;
+    _pressure = bmp.pressure / 100.0;
+    _altitude = bmp.readAltitude(SEALEVELPRESSURE_HPA);
+
+    Serial.print("Temperature = ");
+    Serial.print(_temp);
+    Serial.println(" *C");
+
+    Serial.print("Pressure = ");
+    Serial.print(_pressure);
+    Serial.println(" hPa");
+
+    Serial.print("Approx. Altitude = ");
+    Serial.print(_altitude);
+    Serial.println(" m");
+
+    Serial.println();
+}
+
+void printGPSData()
+{
+    Serial.print("Satellite Count:");
+    Serial.println(gps.satellites.value());
+    Serial.print("Latitude:");
+    Serial.println(gps.location.lat(), 6);
+    Serial.print("Longitude:");
+    Serial.println(gps.location.lng(), 6);
+
+    Serial.print("Altitude Feet:");
+    Serial.println(gps.altitude.feet());
+    Serial.println("");
+
+    Serial.print("Date: ");
+    if (gps.date.isValid())
+    {
+        Serial.print(gps.date.month());
+        Serial.print("/");
+        Serial.print(gps.date.day());
+        Serial.print("/");
+        Serial.println(gps.date.year());
+    }
+
+    Serial.print("Time: ");
+    if (gps.time.isValid())
+    {
+        if (gps.time.hour() < 10)
+            Serial.print(F("0"));
+        Serial.print(gps.time.hour());
+        Serial.print(":");
+        if (gps.time.minute() < 10)
+            Serial.print(F("0"));
+        Serial.print(gps.time.minute());
+        Serial.print(":");
+        if (gps.time.second() < 10)
+            Serial.print(F("0"));
+        Serial.print(gps.time.second());
+        Serial.print(".GMT");
+    }
+    Serial.println("");
+}
+
+void loraSend()
+{
+    static int i = 0;
+    Message message;
+    message.temperature = i + 0.7;
+    message.enlem = 41.015137;
+    message.boylam = 28.979530;
+    message.uydu = 7;
+    message.basinc = 1013.25;
+    message.yukseklik = 200.0;
+    message.orx = 0.1;
+    message.ory = 0.2;
+    message.orz = 0.3;
+    message.stepCount = 100;
+    message.fireStatus = 'N';
+
+    ResponseStatus rs = e32ttl.sendFixedMessage(0, 1, 23, message.bytes, sizeof(Message));
+    Serial.println(rs.getResponseDescription());
+    i++;
+}
