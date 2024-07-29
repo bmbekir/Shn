@@ -4,7 +4,7 @@
 #include <ProcessRunner.h>
 #include <E32Process/E32Process.h>
 #include <BNO055Process/BNO055Process.h>
-#include "definations.h"
+#include "./../definations.h"
 #include <DataLoader.h>
 ProcessRunner *runner;
 E32Process *e32;

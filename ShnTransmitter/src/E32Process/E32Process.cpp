@@ -1,6 +1,7 @@
 #include "E32Process.h"
 #include "Data.h"
 #include "DataLoader.h"
+#include "DataConverter.h"
 
 E32Process::E32Process(byte txPin, byte rxPin, byte auxPin, byte m0Pin, byte m1Pin)
 {
@@ -43,8 +44,9 @@ int E32Process::run()
     // Serial.print("temp:");
     // Serial.println(data->temperature);
     // Serial.println("Send Data End");
-
-    ResponseStatus rs = this->e32ttl->sendFixedMessage(0, 2, 23, data, sizeof(Data));
+    int size = sizeof(GeneralData);
+    uint8_t *sendData = DataConverter::getDataBytes((void *)&data->general, DATA_TYPE::GNL_DATA_TYPE, size);
+    ResponseStatus rs = this->e32ttl->sendFixedMessage(0, 2, 23, sendData, size);
     rs.getResponseDescription();
     delete data;
     return 1000;
